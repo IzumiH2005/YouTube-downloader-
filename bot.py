@@ -17,6 +17,9 @@ from telegram.ext import (
 )
 from telegram import ParseMode
 from telegram import error as telegram_error
+from telegram.utils.request import Request
+import tempfile
+import hashlib
 
 from config import Config
 from locales import MESSAGES
@@ -42,10 +45,18 @@ class YouTubeAudioDownloaderBot:
         self.db = Database()
         self.download_manager = DownloadManager()
 
+        # Amélioration de la gestion des instances
+        self._request = Request(
+            con_pool_size=8,
+            connect_timeout=30,
+            read_timeout=30
+        )
+
         # Initialize properties
         self.active_downloads = {}
         self.retry_attempts = {}
         self.max_retries = 3
+        self._tmp_dir = tempfile.mkdtemp()
 
     def start_command(self, update: Update, context) -> int:
         """Commande de démarrage du bot"""
@@ -89,7 +100,7 @@ class YouTubeAudioDownloaderBot:
                 "• Téléchargement toutes les 30 secondes"
             )
             query.edit_message_text(
-                help_text, 
+                help_text,
                 parse_mode=ParseMode.MARKDOWN
             )
             return ConversationHandler.END
@@ -300,7 +311,13 @@ class YouTubeAudioDownloaderBot:
 
     def setup_bot(self):
         """Setup bot with enhanced conversation handler"""
-        updater = Updater(self.config.TELEGRAM_BOT_TOKEN, use_context=True)
+        # Utilisation d'un seul updater avec timeout optimisé
+        updater = Updater(
+            self.config.TELEGRAM_BOT_TOKEN,
+            use_context=True,
+            request_kwargs={'read_timeout': 30, 'connect_timeout': 30},
+            workers=4
+        )
         dp = updater.dispatcher
 
         conv_handler = ConversationHandler(
@@ -345,51 +362,44 @@ class YouTubeAudioDownloaderBot:
                 logger.info("🚀 Bot YouTube Audio démarré...")
                 updater = self.setup_bot()
 
-                # Configure stop handler
-                if stop_event:
-                    updater._stop_event = stop_event
-
-                # Start polling with optimized parameters and webhook disabled
+                # Nettoyage des mises à jour en attente
                 updater.start_polling(
                     drop_pending_updates=True,
                     timeout=30,
                     bootstrap_retries=3,
-                    poll_interval=1.0,
-                    read_latency=2.0,
+                    poll_interval=2.0,
+                    read_latency=4.0,
                     allowed_updates=['message', 'callback_query']
                 )
 
-                # Wait for stop event
+                # Gestion propre de l'arrêt
                 if stop_event:
                     while not stop_event.is_set():
                         time.sleep(1)
                     updater.stop()
+                    logger.info("Bot arrêté proprement")
                 else:
                     updater.idle()
                 break
 
             except telegram_error.Conflict as e:
+                logger.error(f"Conflit détecté, tentative de redémarrage: {e}")
+                time.sleep(retry_delay * (retries + 1))
                 retries += 1
-                logger.warning(f"Conflit détecté (tentative {retries}/{max_retries}): {e}")
-                if retries < max_retries:
-                    logger.info(f"Nouvelle tentative dans {retry_delay} secondes...")
-                    time.sleep(retry_delay)
-                else:
-                    logger.error("Nombre maximum de tentatives atteint. Arrêt du bot.")
-                    raise
-
-            except telegram_error.NetworkError as e:
-                logger.error(f"Erreur réseau : {e}")
-                time.sleep(retry_delay)
                 continue
 
             except Exception as e:
-                logger.error(f"Erreur critique lors du démarrage du bot : {e}")
+                logger.error(f"Erreur critique: {e}")
                 raise
 
             finally:
-                if stop_event and stop_event.is_set():
-                    logger.info("Bot arrêté proprement")
+                # Nettoyage des fichiers temporaires
+                if hasattr(self, '_tmp_dir') and os.path.exists(self._tmp_dir):
+                    try:
+                        import shutil
+                        shutil.rmtree(self._tmp_dir)
+                    except Exception as e:
+                        logger.error(f"Erreur lors du nettoyage: {e}")
 
 if __name__ == "__main__":
     bot = YouTubeAudioDownloaderBot()
