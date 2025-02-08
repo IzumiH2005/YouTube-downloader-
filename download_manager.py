@@ -20,7 +20,8 @@ class DownloadManager:
             'quiet': True,
             'no_warnings': True,
             'outtmpl': os.path.join(self.config.DOWNLOAD_DIR, '%(id)s.%(ext)s'),
-            'max_filesize': self.config.MAX_FILE_SIZE_MB * 1024 * 1024
+            'max_filesize': self.config.MAX_FILE_SIZE_MB * 1024 * 1024,
+            'cookiefile': 'cookies.txt'  # Added this line to use the cookies file
         }
 
     def search_video(self, query: str) -> List[Dict]:
